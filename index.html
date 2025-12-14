@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask-Mongo Task Manager</title>
+    <!-- Load Tailwind CSS for modern, responsive styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom scrollbar for better visual separation */
+        .task-list-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .task-list-container::-webkit-scrollbar-thumb {
+            background-color: #9ca3af; /* gray-400 */
+            border-radius: 4px;
+        }
+        .task-list-container {
+            scrollbar-width: thin;
+            scrollbar-color: #9ca3af #f3f4f6;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        'primary-blue': '#3b82f6',
+                        'secondary-gray': '#f3f4f6',
+                    }
+                }
+            }
+        }
+
+        // --- GLOBAL STATE & UTILITIES ---
+        let tasks = [];
+        const API_BASE = '/api/tasks'; // Base URL for your Flask API
+
+        /**
+         * Renders an informational message (success or error).
+         * @param {string} message - The text message to display.
+         * @param {boolean} isSuccess - True for success (green), false for error (red).
+         */
+        function showMessage(message, isSuccess = true) {
+            const container = document.getElementById('message-container');
+            container.innerHTML = `
+                <div class="p-3 text-sm rounded-lg ${isSuccess ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'} transition duration-300 shadow-md" role="alert">
+                    ${message}
+                </div>
+            `;
+            setTimeout(() => {
+                container.innerHTML = '';
+            }, 5000);
+        }
+
+        /**
+         * Placeholder for the API call with exponential backoff.
+         * You will replace this with your actual Flask API endpoints.
+         * @param {string} url - The API endpoint path.
+         * @param {object} options - Fetch options (method, headers, body).
+         * @returns {Promise<object>} The parsed JSON response.
+         */
+        async function fetchWithBackoff(url, options, retries = 3) {
+            const apiKey = ""; // Leave as-is for Canvas environment
+            const apiUrl = `${url}?key=${apiKey}`; // If key is needed for some APIs
+
+            for (let i = 0; i < retries; i++) {
+                try {
+                    // Simulate latency for the API call
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                    // --- MOCK RESPONSE FOR FRONTEND DEMO (REPLACE WITH REAL FETCH) ---
+                    console.log(`[MOCK API]: ${options.method} ${url} called with data:`, options.body ? JSON.parse(options.body) : 'None');
+
+                    if (url.includes('login') || url.includes('register')) {
+                        // Mock user auth response
+                        return { success: true, message: "Authentication successful (MOCK)", user_id: "user123" };
+                    }
+                    if (url.includes('tasks') && options.method === 'GET') {
+                        // Mock GET tasks response
+                        return {
+                            success: true,
+                            tasks: [
+                                { _id: '1', title: 'Setup Flask API Endpoints', description: 'Create CRUD routes for /api/tasks.', status: 'To Do', created: new Date().toLocaleDateString() },
+                                { _id: '2', title: 'Design MongoDB Schema', description: 'Define collections for Users and Tasks.', status: 'In Progress', created: new Date().toLocaleDateString() },
+                                { _id: '3', title: 'Implement Frontend AJAX', description: 'Complete the AJAX calls in index.html.', status: 'Completed', created: '10/25/2025' }
+                            ]
+                        };
+                    }
+                    if (options.method === 'POST') {
+                        // Mock POST response
+                        return { success: true, message: "Task created successfully (MOCK)", _id: Date.now().toString() };
+                    }
+                    if (options.method === 'PUT') {
+                         // Mock PUT response
+                        return { success: true, message: "Task updated successfully (MOCK)" };
+                    }
+                     if (options.method === 'DELETE') {
+                         // Mock DELETE response
+                        return { success: true, message: "Task deleted successfully (MOCK)" };
+                    }
+                    // --- END MOCK RESPONSE ---
+
+                    // REAL FETCH implementation (uncomment and use once Flask is running)
+                    /*
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const data = await response.json();
+                    if (data.error) {
+                         throw new Error(data.error);
+                    }
+                    return data;
+                    */
+
+                } catch (error) {
+                    console.error(`Attempt ${i + 1} failed: ${error.message}`);
+                    if (i === retries - 1) {
+                        throw new Error("Failed to connect to the server. Please check your Flask API.");
+                    }
+                    const delay = Math.pow(2, i) * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // --- AUTHENTICATION LOGIC (MOCK) ---
+
+        /**
+         * Toggles visibility between the Auth and App screens.
+         * In a real app, this is determined by session/JWT token presence.
+         */
+        function toggleAppView(isLoggedIn) {
+            document.getElementById('auth-screen').classList.toggle('hidden', isLoggedIn);
+            document.getElementById('app-screen').classList.toggle('hidden', !isLoggedIn);
+            if (isLoggedIn) {
+                // Fetch tasks immediately upon successful login/load
+                fetchTasks();
+            }
+        }
+
+        /**
+         * Handles user registration submission.
+         */
+        async function handleRegister(event) {
+            event.preventDefault();
+            const email = document.getElementById('register-email').value;
+            const password = document.getElementById('register-password').value;
+
+            try {
+                const response = await fetchWithBackoff('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (response.success) {
+                    showMessage("Registration successful! Please log in.", true);
+                    // Switch to login form after successful registration
+                    document.getElementById('toggle-login-btn').click();
+                } else {
+                    showMessage(response.message || "Registration failed.", false);
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, false);
+            }
+        }
+
+        /**
+         * Handles user login submission.
+         */
+        async function handleLogin(event) {
+            event.preventDefault();
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+
+            try {
+                const response = await fetchWithBackoff('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                if (response.success) {
+                    // In a real Flask app, you'd store the session token here
+                    localStorage.setItem('userToken', 'mock-jwt-token-123');
+                    showMessage("Login successful! Welcome back.", true);
+                    toggleAppView(true);
+                } else {
+                    showMessage(response.message || "Login failed. Check your credentials.", false);
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, false);
+            }
+        }
+
+        /**
+         * Logs the user out (MOCK).
+         */
+        function handleLogout() {
+            localStorage.removeItem('userToken');
+            showMessage("You have been logged out.", true);
+            toggleAppView(false);
+        }
+
+        // --- TASK CRUD LOGIC ---
+
+        /**
+         * Fetches all tasks from the Flask API and updates the UI.
+         */
+        async function fetchTasks() {
+            try {
+                const response = await fetchWithBackoff(API_BASE, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('userToken')}`
+                    }
+                });
+
+                if (response.success) {
+                    tasks = response.tasks || [];
+                    renderTasks();
+                } else {
+                    showMessage("Could not load tasks.", false);
+                }
+            } catch (error) {
+                showMessage(`Failed to load tasks: ${error.message}`, false);
+            }
+        }
+
+        /**
+         * Renders the current list of tasks into the DOM, separated by status.
+         */
+        function renderTasks() {
+            const container = document.getElementById('task-board');
+            container.innerHTML = ''; // Clear previous content
+
+            const statuses = ['To Do', 'In Progress', 'Completed'];
+
+            statuses.forEach(status => {
+                const column = document.createElement('div');
+                column.className = 'w-full lg:w-1/3 p-2 flex-shrink-0';
+                column.innerHTML = `
+                    <div class="bg-secondary-gray rounded-xl p-4 shadow-lg h-full flex flex-col">
+                        <h2 class="text-xl font-bold mb-4 ${status === 'Completed' ? 'text-green-600' : status === 'In Progress' ? 'text-yellow-600' : 'text-gray-700'}">${status}</h2>
+                        <div id="column-${status.replace(/\s/g, '-')}" class="task-list-container space-y-3 overflow-y-auto flex-grow h-0">
+                            <!-- Tasks will be injected here -->
+                        </div>
+                    </div>
+                `;
+                container.appendChild(column);
+
+                const taskList = document.getElementById(`column-${status.replace(/\s/g, '-')}`);
+                const filteredTasks = tasks.filter(t => t.status === status);
+
+                if (filteredTasks.length === 0) {
+                     taskList.innerHTML = `<p class="text-gray-500 text-sm italic p-2">No tasks in this category.</p>`;
+                }
+
+                filteredTasks.forEach(task => {
+                    const taskElement = createTaskCard(task);
+                    taskList.appendChild(taskElement);
+                });
+            });
+        }
+
+        /**
+         * Creates an individual task card DOM element.
+         * @param {object} task - The task data object.
+         * @returns {HTMLElement} The created task card element.
+         */
+        function createTaskCard(task) {
+            const card = document.createElement('div');
+            card.className = 'bg-white p-4 rounded-lg shadow-md border-t-4 border-primary-blue hover:shadow-xl transition duration-200 cursor-pointer';
+            card.setAttribute('data-id', task._id);
+            card.innerHTML = `
+                <h3 class="font-semibold text-lg text-gray-800">${task.title}</h3>
+                <p class="text-sm text-gray-600 mt-1 mb-3">${task.description.substring(0, 50)}${task.description.length > 50 ? '...' : ''}</p>
+                <div class="flex justify-between items-center text-xs text-gray-400">
+                    <span>Created: ${task.created}</span>
+                    <button onclick="openEditModal('${task._id}')" class="text-primary-blue hover:text-blue-700 font-medium">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-7-3l2.293-2.293a1 1 0 011.414 0l1.414 1.414a1 1 0 010 1.414L10 14m-3 3l.044-.044M18 10a8 8 0 11-16 0 8 8 0 0116 0z" />
+                        </svg>
+                        Edit
+                    </button>
+                </div>
+            `;
+            return card;
+        }
+
+        // --- MODAL AND FORM LOGIC ---
+
+        function openCreateModal() {
+            const modal = document.getElementById('task-modal');
+            document.getElementById('modal-title').textContent = 'Create New Task';
+            document.getElementById('task-id').value = ''; // Clear ID for creation
+            document.getElementById('task-form').reset();
+            document.getElementById('delete-button').classList.add('hidden');
+            modal.classList.remove('hidden');
+        }
+
+        function closeTaskModal() {
+            document.getElementById('task-modal').classList.add('hidden');
+        }
+
+        function openEditModal(taskId) {
+            const task = tasks.find(t => t._id === taskId);
+            if (!task) {
+                showMessage('Task not found.', false);
+                return;
+            }
+
+            const modal = document.getElementById('task-modal');
+            document.getElementById('modal-title').textContent = 'Edit Task';
+            document.getElementById('task-id').value = taskId;
+            document.getElementById('task-title').value = task.title;
+            document.getElementById('task-description').value = task.description;
+            document.getElementById('task-status').value = task.status;
+            document.getElementById('delete-button').classList.remove('hidden');
+            modal.classList.remove('hidden');
+        }
+
+        /**
+         * Handles the submission of the create/edit task form.
+         */
+        async function handleTaskSubmit(event) {
+            event.preventDefault();
+            const taskId = document.getElementById('task-id').value;
+            const title = document.getElementById('task-title').value;
+            const description = document.getElementById('task-description').value;
+            const status = document.getElementById('task-status').value;
+
+            const taskData = { title, description, status };
+
+            try {
+                let response;
+                if (taskId) {
+                    // UPDATE (PUT)
+                    response = await fetchWithBackoff(`${API_BASE}/${taskId}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('userToken')}`
+                        },
+                        body: JSON.stringify(taskData)
+                    });
+                } else {
+                    // CREATE (POST)
+                    response = await fetchWithBackoff(API_BASE, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${localStorage.getItem('userToken')}`
+                        },
+                        body: JSON.stringify(taskData)
+                    });
+                }
+
+                if (response.success) {
+                    showMessage(taskId ? "Task updated successfully." : "Task created successfully.", true);
+                    closeTaskModal();
+                    await fetchTasks(); // Refresh list
+                } else {
+                    showMessage(response.message || "Operation failed.", false);
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, false);
+            }
+        }
+
+        /**
+         * Handles task deletion.
+         */
+        async function deleteTask() {
+            if (!window.confirm("Are you sure you want to delete this task?")) {
+                return;
+            }
+            const taskId = document.getElementById('task-id').value;
+            try {
+                const response = await fetchWithBackoff(`${API_BASE}/${taskId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('userToken')}`
+                    }
+                });
+
+                if (response.success) {
+                    showMessage("Task deleted successfully.", true);
+                    closeTaskModal();
+                    await fetchTasks(); // Refresh list
+                } else {
+                    showMessage(response.message || "Deletion failed.", false);
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, false);
+            }
+        }
+
+        // --- INITIALIZATION ---
+
+        window.onload = function() {
+            // Check if user is theoretically logged in (via mock token)
+            const token = localStorage.getItem('userToken');
+            toggleAppView(!!token);
+
+            // Setup form listeners
+            document.getElementById('login-form').addEventListener('submit', handleLogin);
+            document.getElementById('register-form').addEventListener('submit', handleRegister);
+            document.getElementById('task-form').addEventListener('submit', handleTaskSubmit);
+
+            // Listener to switch between login and register forms
+            document.getElementById('toggle-register-btn').addEventListener('click', () => {
+                document.getElementById('login-form').classList.add('hidden');
+                document.getElementById('register-form').classList.remove('hidden');
+                document.getElementById('toggle-login-btn').classList.remove('hidden');
+                document.getElementById('toggle-register-btn').classList.add('hidden');
+                showMessage("Register to create an account.", false);
+            });
+
+            document.getElementById('toggle-login-btn').addEventListener('click', () => {
+                document.getElementById('login-form').classList.remove('hidden');
+                document.getElementById('register-form').classList.add('hidden');
+                document.getElementById('toggle-login-btn').classList.add('hidden');
+                document.getElementById('toggle-register-btn').classList.remove('hidden');
+                showMessage("Welcome back! Please sign in.", false);
+            });
+        };
+
+    </script>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+
+    <!-- Message Container -->
+    <div id="message-container" class="fixed top-4 right-4 z-50 w-full max-w-sm"></div>
+
+    <!-- MAIN CONTAINER -->
+    <div class="p-4 sm:p-8 max-w-7xl mx-auto">
+
+        <!-- Header -->
+        <header class="flex justify-between items-center py-4 border-b-2 border-primary-blue mb-6">
+            <h1 class="text-3xl font-extrabold text-gray-800">Python-Mongo Task Board</h1>
+            <div id="header-buttons">
+                <!-- Buttons are conditionally rendered by JS/visibility -->
+                <button id="logout-button" onclick="handleLogout()" class="text-white bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg font-medium shadow-md transition duration-150">
+                    Logout
+                </button>
+            </div>
+        </header>
+
+
+        <!-- AUTHENTICATION SCREEN (Hidden by default when logged in) -->
+        <div id="auth-screen" class="max-w-md mx-auto bg-white p-8 rounded-xl shadow-2xl space-y-6 mt-16">
+            <h2 class="text-2xl font-bold text-center text-primary-blue">Developer Sign-In</h2>
+
+            <!-- Login Form -->
+            <form id="login-form" class="space-y-4">
+                <input type="email" id="login-email" placeholder="Email" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                <input type="password" id="login-password" placeholder="Password" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                <button type="submit" class="w-full bg-primary-blue text-white p-3 rounded-lg font-semibold hover:bg-blue-700 transition duration-150 shadow-lg">
+                    Log In
+                </button>
+            </form>
+
+            <!-- Register Form (Hidden initially) -->
+            <form id="register-form" class="space-y-4 hidden" onsubmit="handleRegister(event)">
+                <input type="email" id="register-email" placeholder="Email" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                <input type="password" id="register-password" placeholder="Password" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue">
+                <button type="submit" class="w-full bg-green-500 text-white p-3 rounded-lg font-semibold hover:bg-green-600 transition duration-150 shadow-lg">
+                    Register Account
+                </button>
+            </form>
+
+            <div class="text-center">
+                <button id="toggle-register-btn" class="text-sm text-primary-blue hover:underline">
+                    Don't have an account? Register
+                </button>
+                 <button id="toggle-login-btn" class="text-sm text-primary-blue hover:underline hidden">
+                    Already have an account? Login
+                </button>
+            </div>
+        </div>
+
+
+        <!-- APPLICATION SCREEN (Hidden initially) -->
+        <div id="app-screen" class="hidden">
+            <div class="mb-6 flex justify-end">
+                <button onclick="openCreateModal()" class="bg-primary-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 transition duration-200 shadow-lg flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
+                    </svg>
+                    Add New Task
+                </button>
+            </div>
+
+            <!-- Task Board - Kanban Style -->
+            <div id="task-board" class="flex flex-col lg:flex-row gap-4 task-board-container min-h-[60vh]">
+                <!-- Task columns (To Do, In Progress, Completed) will be rendered here by renderTasks() -->
+            </div>
+            <!--  -->
+        </div>
+
+    </div>
+
+    <!-- Task Create/Edit Modal -->
+    <div id="task-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 hidden z-50 flex items-center justify-center p-4" onclick="if(event.target.id === 'task-modal') closeTaskModal()">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 transform transition-all scale-100 opacity-100">
+            <h3 id="modal-title" class="text-2xl font-bold mb-4 border-b pb-2 text-gray-800">Create New Task</h3>
+
+            <form id="task-form">
+                <input type="hidden" id="task-id">
+
+                <div class="mb-4">
+                    <label for="task-title" class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                    <input type="text" id="task-title" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue shadow-sm">
+                </div>
+
+                <div class="mb-4">
+                    <label for="task-description" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea id="task-description" rows="4" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue shadow-sm"></textarea>
+                </div>
+
+                <div class="mb-6">
+                    <label for="task-status" class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select id="task-status" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-primary-blue focus:border-primary-blue shadow-sm">
+                        <option value="To Do">To Do</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Completed">Completed</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-between items-center space-x-4">
+                    <button type="button" id="delete-button" onclick="deleteTask()" class="hidden bg-red-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-red-600 transition duration-150 shadow-md">
+                        Delete Task
+                    </button>
+                    <div class="flex space-x-4 ml-auto">
+                        <button type="button" onclick="closeTaskModal()" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-300 transition duration-150 shadow-md">
+                            Cancel
+                        </button>
+                        <button type="submit" class="bg-primary-blue text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition duration-150 shadow-md">
+                            Save Task
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+</body>
+</html>
